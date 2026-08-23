@@ -73,9 +73,9 @@
 - **レビューコメントはすべて日本語で書いてください。**
 - レビュー環境は [`.github/workflows/copilot-code-review.yml`](workflows/copilot-code-review.yml) の `copilot-setup-steps` ジョブが準備します。レビュー開始時点で以下の**事前生成レポート**がディスク上にあるので、指摘の前に必ず参照してください:
   - ESLint（JSON / テキスト）: `/home/runner/.copilot-code-review/reports/eslint-report.json`
-  - CodeQL SARIF: `/home/runner/.copilot-code-review/reports/codeql/javascript-typescript.sarif`
+  - CodeQL SARIF: `/home/runner/.copilot-code-review/reports/codeql/results.sarif`
   - 型チェックログ: `/home/runner/.copilot-code-review/reports/typecheck.log`
-  - CodeQL CLI / データベース: `/home/runner/.copilot-code-review/codeql/codeql`、`/home/runner/.copilot-code-review/codeql-db/javascript-typescript`
+  - CodeQL CLI / データベース: `/home/runner/.copilot-code-review/codeql/codeql`、`/home/runner/.copilot-code-review/codeql-db/database`
 - 指摘は **PR の差分行に該当するものだけ**に限定し、既存の無関係な警告で PR を汚さないでください。
 - CodeQL 由来の指摘にはルール ID と CWE を、ESLint 由来の指摘にはルール ID を併記し、可能なら suggestion 形式で修正案を示してください。
 - レビュー中はファイアウォール下でネットワークが制限されます。追加のツールをダウンロードせず、セットアップ済みの成果物を使ってください。

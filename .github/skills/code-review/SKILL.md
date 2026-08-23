@@ -30,8 +30,8 @@ allowed-tools:
 | ESLint（JSON、機械可読） | `/home/runner/.copilot-code-review/reports/eslint-report.json` |
 | ESLint（stylish、人間可読） | `/home/runner/.copilot-code-review/reports/eslint-report.txt` |
 | 型チェックログ（tsgo + astro check） | `/home/runner/.copilot-code-review/reports/typecheck.log` |
-| CodeQL SARIF | `/home/runner/.copilot-code-review/reports/codeql/javascript-typescript.sarif` |
-| CodeQL データベース | `/home/runner/.copilot-code-review/codeql-db/javascript-typescript` |
+| CodeQL SARIF | `/home/runner/.copilot-code-review/reports/codeql/results.sarif` |
+| CodeQL データベース | `/home/runner/.copilot-code-review/codeql-db/database` |
 | CodeQL CLI 実行ファイル | `/home/runner/.copilot-code-review/codeql/codeql` |
 
 まず存在確認を行います:
@@ -97,7 +97,7 @@ jq '[.[].messages[] | select(.fix != null)] | length' \
 SARIF は `runs[0].results[]` に検出結果、`runs[0].tool.driver.rules[]` にルール定義（説明・重大度・CWE タグ）が入ります。
 
 ```bash
-SARIF=/home/runner/.copilot-code-review/reports/codeql/javascript-typescript.sarif
+SARIF=/home/runner/.copilot-code-review/reports/codeql/results.sarif
 
 # 件数
 jq '[.runs[].results[]] | length' "$SARIF"
@@ -179,12 +179,12 @@ git diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.ts' '*.astro' \
 ```bash
 # 事前生成された CodeQL データベースに対して追加クエリを実行する
 CODEQL=/home/runner/.copilot-code-review/codeql/codeql
-DB=/home/runner/.copilot-code-review/codeql-db/javascript-typescript
+DB=/home/runner/.copilot-code-review/codeql-db/database
 
 "$CODEQL" database analyze "$DB" \
-  codeql/javascript-queries:codeql-suites/javascript-security-extended.qls \
+  codeql/javascript-queries:codeql-suites/javascript-security-and-quality.qls \
   --format=sarifv2.1.0 \
-  --output=/home/runner/.copilot-code-review/reports/codeql/extended.sarif \
+  --output=/home/runner/.copilot-code-review/reports/codeql/extra.sarif \
   --download=false \
   --threads=0
 ```
@@ -197,9 +197,11 @@ DB=/home/runner/.copilot-code-review/codeql-db/javascript-typescript
 ```
 
 > [!NOTE]
-> レビュー中はネットワークが制限されるため `--download=false` を付け、
-> セットアップ時に取得済みのクエリパックのみを使用してください。
-> 追加解析は数分かかることがあります。事前レポートで判断できる場合は実行しないでください。
+> セットアップ時点で **`security-extended` スイート**を `threat-models: local` 付きで実行済みです
+> （ローカル入力 — CLI 引数・環境変数・ファイル読み込み — もテイントのソースとして扱われます）。
+> したがって `results.sarif` にはすでに広い範囲の検出が含まれており、追加解析はほとんどの場合不要です。
+> レビュー中はネットワークが制限されるため、実行する場合は必ず `--download=false` を付け、
+> セットアップ時に取得済みのクエリパックのみを使用してください（数分かかります）。
 
 ---
 

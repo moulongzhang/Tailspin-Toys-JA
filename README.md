@@ -135,8 +135,10 @@ npm run typecheck:all    # 上記の両方
 | --- | --- |
 | ESLint（JSON / テキスト） | `reports/eslint-report.json` / `reports/eslint-report.txt` |
 | 型チェックログ | `reports/typecheck.log` |
-| CodeQL SARIF（Code scanning へはアップロードしない） | `reports/codeql/javascript-typescript.sarif` |
-| CodeQL データベース / CLI | `codeql-db/javascript-typescript` / `codeql/codeql` |
+| CodeQL SARIF（Code scanning へはアップロードしない） | `reports/codeql/results.sarif` |
+| CodeQL データベース / CLI | `codeql-db/database` / `codeql/codeql` |
+
+CodeQL は `security-extended` スイートを `threat-models: local` 付きで実行します。このサイトはビルド時に CSV・環境変数・CLI 引数を読み込む静的サイトなので、リモート入力だけでなくローカル入力もテイントのソースとして扱い、パストラバーサルやコマンドインジェクションの検出精度を上げています。
 
 レビュー実行中はファイアウォールでネットワークが制限されるため、CodeQL バンドルの取得などネットワークが必要な処理はすべてこのセットアップステップで完了させています。
 

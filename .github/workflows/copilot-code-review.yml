@@ -98,6 +98,12 @@ jobs:
 
       # CodeQL データベースを作成する。データベースはレビュー中に追加クエリを
       # 実行できるよう固定パスに置く。build-mode: none で JS/TS はビルド不要。
+      #
+      # config で以下を指定している:
+      #   - queries: security-extended … 既定スイートより広い範囲のセキュリティクエリ
+      #   - threat-models: local … このサイトはビルド時に CSV / 環境変数 / CLI 引数を
+      #     読み込む静的サイトなので、リモート入力だけでなくローカル入力も
+      #     テイントのソースとして扱う（path injection や command injection の検出精度が上がる）
       - name: Initialize CodeQL
         id: codeql-init
         uses: github/codeql-action/init@v4
@@ -105,6 +111,11 @@ jobs:
           languages: javascript-typescript
           build-mode: none
           db-location: /home/runner/.copilot-code-review/codeql-db
+          config: |
+            queries:
+              - uses: security-extended
+            threat-models:
+              - local
 
       # 標準の security-and-quality クエリを実行し SARIF をレポートディレクトリへ出力する。
       # upload: never / upload-database: false で Code scanning へは一切アップロードしない
@@ -128,6 +139,30 @@ jobs:
           cp -a "$CODEQL_HOME" "$CCR_ROOT/codeql"
           "$CCR_ROOT/codeql/codeql" version --format=terse
 
+      # レビュー時に skill から参照する絶対パスを安定させる。
+      # CodeQL が出力する SARIF / データベースのディレクトリ名は言語エイリアスや
+      # CLI のバージョンに依存する（例: javascript.sarif / codeql-db/javascript）ため、
+      # 正規化した固定パスを用意して skill 側はそちらだけを見ればよいようにする。
+      - name: Canonicalize the CodeQL output paths
+        run: |
+          SARIF_SRC="$(find "$CCR_ROOT/reports/codeql" -maxdepth 1 -name '*.sarif' ! -name 'results.sarif' | head -n 1)"
+          if [ -n "$SARIF_SRC" ]; then
+            cp -f "$SARIF_SRC" "$CCR_ROOT/reports/codeql/results.sarif"
+            echo "SARIF: $SARIF_SRC -> $CCR_ROOT/reports/codeql/results.sarif"
+          else
+            echo "警告: SARIF が見つかりませんでした" >&2
+          fi
+
+          DB_SRC="$(find "$CCR_ROOT/codeql-db" -maxdepth 1 -mindepth 1 -type d \
+            ! -name 'log' ! -name 'working' ! -name 'diagnostic' ! -name 'database' | head -n 1)"
+          if [ -n "$DB_SRC" ]; then
+            rm -rf "$CCR_ROOT/codeql-db/database"
+            ln -s "$DB_SRC" "$CCR_ROOT/codeql-db/database"
+            echo "CodeQL DB: $DB_SRC -> $CCR_ROOT/codeql-db/database"
+          else
+            echo "警告: CodeQL データベースが見つかりませんでした" >&2
+          fi
+
       # レビュー時に skill から参照する絶対パスを 1 ファイルにまとめて残す
       - name: Write the report manifest
         run: |
@@ -142,8 +177,8 @@ jobs:
             echo "| ESLint (JSON) | $CCR_ROOT/reports/eslint-report.json |"
             echo "| ESLint (テキスト) | $CCR_ROOT/reports/eslint-report.txt |"
             echo "| 型チェックログ | $CCR_ROOT/reports/typecheck.log |"
-            echo "| CodeQL SARIF | $CCR_ROOT/reports/codeql/javascript-typescript.sarif |"
-            echo "| CodeQL データベース | $CCR_ROOT/codeql-db/javascript-typescript |"
+            echo "| CodeQL SARIF | $CCR_ROOT/reports/codeql/results.sarif |"
+            echo "| CodeQL データベース | $CCR_ROOT/codeql-db/database |"
             echo "| CodeQL CLI | $CCR_ROOT/codeql/codeql |"
           } > "$CCR_ROOT/reports/MANIFEST.md"
           cat "$CCR_ROOT/reports/MANIFEST.md"
@@ -160,6 +195,6 @@ jobs:
           echo "===== $CCR_ROOT/codeql-db ====="
           ls -la "$CCR_ROOT/codeql-db" || true
           echo "===== SARIF の件数 ====="
-          for f in "$CCR_ROOT"/reports/codeql/*.sarif; do
-            echo "$f: $(jq '[.runs[].results[]] | length' "$f") 件"
-          done
+          jq '[.runs[].results[]] | length' "$CCR_ROOT/reports/codeql/results.sarif"
+          echo "===== 実行されたルール数 ====="
+          jq '[.runs[].tool.driver.rules[]] | length' "$CCR_ROOT/reports/codeql/results.sarif"
