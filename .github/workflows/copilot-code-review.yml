@@ -1,0 +1,200 @@
+name: "Copilot Code Review Setup Steps"
+
+# GitHub Copilot code review (CCR) 専用の環境セットアップ。
+#
+# 仕様上の注意:
+#   - CCR はこのファイル (.github/workflows/copilot-code-review.yml) を優先して読み、
+#     存在しない場合のみ copilot-setup-steps.yml にフォールバックする。
+#   - ジョブ名は必ず `copilot-setup-steps` でなければ CCR に認識されない。
+#   - カスタマイズできるのは steps / permissions / runs-on / services / snapshot /
+#     timeout-minutes (最大 59) のみ。
+#   - この環境設定ファイルは **default branch (main)** に存在して初めて有効になる。
+#     （カスタム指示や .github/skills/** は PR の head ブランチから読まれる。）
+#   - レビュー実行中はファイアウォール配下でネットワークが制限される。そのため
+#     ネットワークが必要な処理（npm ci / CodeQL バンドルの取得など）は
+#     すべてこのセットアップステップ内で完了させる。
+on:
+  # Actions タブから手動実行して動作確認できるようにする
+  workflow_dispatch:
+  # このファイル自身の変更時だけ CI で検証する（レビュー環境の疎通確認用）
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/copilot-code-review.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/copilot-code-review.yml"
+
+env:
+  # Astro のテレメトリを無効化して CI ログを静かに保つ
+  ASTRO_TELEMETRY_DISABLED: "1"
+
+jobs:
+  # ジョブ名は CCR の仕様上 `copilot-setup-steps` 固定
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    # レビュー用の解析はリポジトリの読み取りだけで完結する。
+    # CodeQL の結果は Code scanning にアップロードしないため security-events は不要。
+    permissions:
+      contents: read
+    # 依存関係のインストールと CodeQL 解析を含むため余裕を持たせる（上限は 59 分）
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # レポートの出力先を作成する。$HOME 配下の固定パスにすることで、
+      # レビュー実行時にも同じ絶対パスで参照できるようにする。
+      - name: Prepare report directory
+        run: |
+          echo "CCR_ROOT=$HOME/.copilot-code-review" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.copilot-code-review/reports/codeql"
+
+      # アプリ全体が Astro + Drizzle/Node SQLite なので Node.js をセットアップする
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+          cache-dependency-path: "./package-lock.json"
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      # 注: Playwright のブラウザ (npx playwright install) は **意図的に省略**している。
+      # コードレビューは静的解析とコード読解が中心で E2E ブラウザ実行は行わないため、
+      # 数百 MB のダウンロードはレビュー環境のセットアップ時間を無駄に伸ばすだけになる。
+      # E2E の検証は run-tests.yml の CI ジョブが担当する。
+
+      # ESLint / astro check が エディタと同じ型を見られるように Astro の型を生成する
+      - name: Sync Astro types
+        run: npx astro sync
+
+      # ビルド時にデータベースを参照するため、migrate + seed しておく。
+      # これにより astro check / astro build をレビュー中に実行しても失敗しない。
+      - name: Set up the database
+        run: npm run db:setup
+
+      # ESLint のレポートを事前生成する（JSON = 機械可読、txt = 人間可読）。
+      # lint エラーがあってもセットアップは失敗させない。セットアップステップが
+      # 非ゼロ終了すると以降のステップがスキップされてしまうため必ず成功扱いにする。
+      - name: Generate ESLint reports
+        run: |
+          set +e
+          npx eslint . -f json -o "$CCR_ROOT/reports/eslint-report.json"
+          npx eslint . -f stylish > "$CCR_ROOT/reports/eslint-report.txt" 2>&1
+          echo "ESLint exit code: $?" >> "$CCR_ROOT/reports/eslint-report.txt"
+          exit 0
+
+      # 型チェック (tsgo + astro check) の結果をログファイルに保存する。
+      # こちらも失敗してもセットアップは継続する。
+      - name: Generate type-check report
+        run: |
+          set +e
+          npm run typecheck:all > "$CCR_ROOT/reports/typecheck.log" 2>&1
+          echo "typecheck exit code: $?" >> "$CCR_ROOT/reports/typecheck.log"
+          exit 0
+
+      # CodeQL データベースを作成する。データベースはレビュー中に追加クエリを
+      # 実行できるよう固定パスに置く。build-mode: none で JS/TS はビルド不要。
+      #
+      # config で以下を指定している:
+      #   - queries: security-extended … 既定スイートより広い範囲のセキュリティクエリ
+      #   - threat-models: local … このサイトはビルド時に CSV / 環境変数 / CLI 引数を
+      #     読み込む静的サイトなので、リモート入力だけでなくローカル入力も
+      #     テイントのソースとして扱う（path injection や command injection の検出精度が上がる）
+      - name: Initialize CodeQL
+        id: codeql-init
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          db-location: /home/runner/.copilot-code-review/codeql-db
+          config: |
+            queries:
+              - uses: security-extended
+            threat-models:
+              - local
+
+      # 標準の security-and-quality クエリを実行し SARIF をレポートディレクトリへ出力する。
+      # upload: never / upload-database: false で Code scanning へは一切アップロードしない
+      # （このワークフローは security-events: write を持たないため必須）。
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@v4
+        with:
+          output: /home/runner/.copilot-code-review/reports/codeql
+          upload: never
+          upload-database: false
+
+      # CodeQL CLI 本体をレビュー中も使えるよう固定パスへ配置する。
+      # レビュー実行時はファイアウォール下でバンドルを再取得できないため、
+      # ツールキャッシュから $HOME 配下へコピーしておく。
+      - name: Stage the CodeQL CLI at a stable path
+        run: |
+          CODEQL_BIN="${{ steps.codeql-init.outputs.codeql-path }}"
+          CODEQL_HOME="$(dirname "$CODEQL_BIN")"
+          echo "CodeQL CLI (tool cache): $CODEQL_BIN"
+          rm -rf "$CCR_ROOT/codeql"
+          cp -a "$CODEQL_HOME" "$CCR_ROOT/codeql"
+          "$CCR_ROOT/codeql/codeql" version --format=terse
+
+      # レビュー時に skill から参照する絶対パスを安定させる。
+      # CodeQL が出力する SARIF / データベースのディレクトリ名は言語エイリアスや
+      # CLI のバージョンに依存する（例: javascript.sarif / codeql-db/javascript）ため、
+      # 正規化した固定パスを用意して skill 側はそちらだけを見ればよいようにする。
+      - name: Canonicalize the CodeQL output paths
+        run: |
+          SARIF_SRC="$(find "$CCR_ROOT/reports/codeql" -maxdepth 1 -name '*.sarif' ! -name 'results.sarif' | head -n 1)"
+          if [ -n "$SARIF_SRC" ]; then
+            cp -f "$SARIF_SRC" "$CCR_ROOT/reports/codeql/results.sarif"
+            echo "SARIF: $SARIF_SRC -> $CCR_ROOT/reports/codeql/results.sarif"
+          else
+            echo "警告: SARIF が見つかりませんでした" >&2
+          fi
+
+          DB_SRC="$(find "$CCR_ROOT/codeql-db" -maxdepth 1 -mindepth 1 -type d \
+            ! -name 'log' ! -name 'working' ! -name 'diagnostic' ! -name 'database' | head -n 1)"
+          if [ -n "$DB_SRC" ]; then
+            rm -rf "$CCR_ROOT/codeql-db/database"
+            ln -s "$DB_SRC" "$CCR_ROOT/codeql-db/database"
+            echo "CodeQL DB: $DB_SRC -> $CCR_ROOT/codeql-db/database"
+          else
+            echo "警告: CodeQL データベースが見つかりませんでした" >&2
+          fi
+
+      # レビュー時に skill から参照する絶対パスを 1 ファイルにまとめて残す
+      - name: Write the report manifest
+        run: |
+          {
+            echo "# Copilot code review 事前生成レポート"
+            echo ""
+            echo "生成日時 (UTC): $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "コミット: ${GITHUB_SHA}"
+            echo ""
+            echo "| 種別 | 絶対パス |"
+            echo "| --- | --- |"
+            echo "| ESLint (JSON) | $CCR_ROOT/reports/eslint-report.json |"
+            echo "| ESLint (テキスト) | $CCR_ROOT/reports/eslint-report.txt |"
+            echo "| 型チェックログ | $CCR_ROOT/reports/typecheck.log |"
+            echo "| CodeQL SARIF | $CCR_ROOT/reports/codeql/results.sarif |"
+            echo "| CodeQL データベース | $CCR_ROOT/codeql-db/database |"
+            echo "| CodeQL CLI | $CCR_ROOT/codeql/codeql |"
+          } > "$CCR_ROOT/reports/MANIFEST.md"
+          cat "$CCR_ROOT/reports/MANIFEST.md"
+
+      # 生成物が実際に揃っているかをログで確認できるようにする
+      - name: List generated artifacts
+        run: |
+          echo "===== $CCR_ROOT ====="
+          ls -la "$CCR_ROOT"
+          echo "===== $CCR_ROOT/reports ====="
+          ls -la "$CCR_ROOT/reports"
+          echo "===== $CCR_ROOT/reports/codeql ====="
+          ls -la "$CCR_ROOT/reports/codeql"
+          echo "===== $CCR_ROOT/codeql-db ====="
+          ls -la "$CCR_ROOT/codeql-db" || true
+          echo "===== SARIF の件数 ====="
+          jq '[.runs[].results[]] | length' "$CCR_ROOT/reports/codeql/results.sarif"
+          echo "===== 実行されたルール数 ====="
+          jq '[.runs[].tool.driver.rules[]] | length' "$CCR_ROOT/reports/codeql/results.sarif"
