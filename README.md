@@ -125,6 +125,24 @@ npm run typecheck:all    # 上記の両方
 - テストの失敗（ポートの競合、古いサーバー、不安定なテスト、CI との差異）を診断するとき
 - コミット、プッシュ、マージの前に準備状況を検証するとき
 
+### code-review スキルと Copilot code review 環境
+
+**code-review** スキル（`.github/skills/code-review/SKILL.md`）は、**GitHub Copilot code review (CCR)** が pull request をレビューするときの手順書です。レビューコメントは日本語で書かれ、指摘は PR の差分行に限定されます。
+
+レビュー環境は `.github/workflows/copilot-code-review.yml`（ジョブ名は CCR の仕様上 `copilot-setup-steps` 固定）が準備します。このジョブは依存関係のインストールに加えて、レビュー開始前に次のレポートを `/home/runner/.copilot-code-review/` へ事前生成します:
+
+| 種別 | パス |
+| --- | --- |
+| ESLint（JSON / テキスト） | `reports/eslint-report.json` / `reports/eslint-report.txt` |
+| 型チェックログ | `reports/typecheck.log` |
+| CodeQL SARIF（Code scanning へはアップロードしない） | `reports/codeql/javascript-typescript.sarif` |
+| CodeQL データベース / CLI | `codeql-db/javascript-typescript` / `codeql/codeql` |
+
+レビュー実行中はファイアウォールでネットワークが制限されるため、CodeQL バンドルの取得などネットワークが必要な処理はすべてこのセットアップステップで完了させています。
+
+> [!NOTE]
+> 環境設定ファイル（`copilot-code-review.yml`）は **default branch (`main`) に存在して初めて有効**になります。一方、カスタム指示（`.github/copilot-instructions.md`、`.github/instructions/**`）と skill（`.github/skills/**`）は **PR の head ブランチ**から読まれます。
+
 ### GitHub Copilot app の Run メニュー
 
 [GitHub Copilot app](https://github.com/github/github-app) は

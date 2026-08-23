@@ -65,6 +65,24 @@
 - ワークフローの権限を明示的に設定してください
 - どのようなタスクを実行しているかを記述するコメントを追加してください
 
+## Copilot code review（コードレビュー）
+
+このリポジトリの pull request は **GitHub Copilot code review (CCR)** によってレビューされます。
+
+- **レビュー時は必ず `code-review` skill に従ってください**（[`.github/skills/code-review/SKILL.md`](skills/code-review/SKILL.md)）。手順・レポートの絶対パス・コメントの書き方・ノイズ抑制ポリシーはすべてこの skill が唯一の情報源です。
+- **レビューコメントはすべて日本語で書いてください。**
+- レビュー環境は [`.github/workflows/copilot-code-review.yml`](workflows/copilot-code-review.yml) の `copilot-setup-steps` ジョブが準備します。レビュー開始時点で以下の**事前生成レポート**がディスク上にあるので、指摘の前に必ず参照してください:
+  - ESLint（JSON / テキスト）: `/home/runner/.copilot-code-review/reports/eslint-report.json`
+  - CodeQL SARIF: `/home/runner/.copilot-code-review/reports/codeql/javascript-typescript.sarif`
+  - 型チェックログ: `/home/runner/.copilot-code-review/reports/typecheck.log`
+  - CodeQL CLI / データベース: `/home/runner/.copilot-code-review/codeql/codeql`、`/home/runner/.copilot-code-review/codeql-db/javascript-typescript`
+- 指摘は **PR の差分行に該当するものだけ**に限定し、既存の無関係な警告で PR を汚さないでください。
+- CodeQL 由来の指摘にはルール ID と CWE を、ESLint 由来の指摘にはルール ID を併記し、可能なら suggestion 形式で修正案を示してください。
+- レビュー中はファイアウォール下でネットワークが制限されます。追加のツールをダウンロードせず、セットアップ済みの成果物を使ってください。
+
+> [!NOTE]
+> `copilot-code-review.yml` は **default branch (main) に存在して初めて有効**になります。一方、カスタム指示（このファイル、`.github/instructions/**`）と `.github/skills/**` は **PR の head ブランチ**から読まれます。
+
 ## スクリプト
 
 - このプロジェクトはすべての開発タスクに **npm scripts** を使用します — `scripts/` ディレクトリはありません。
