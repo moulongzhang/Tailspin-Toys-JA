@@ -94,31 +94,36 @@ jq '[.[].messages[] | select(.fix != null)] | length' \
 
 ## 4. CodeQL SARIF の読み方
 
-SARIF は `runs[0].results[]` に検出結果、`runs[0].tool.driver.rules[]` にルール定義（説明・重大度・CWE タグ）が入ります。
+SARIF は `runs[0].results[]` に検出結果が入ります。ルール定義（説明・重大度・CWE タグ）は
+`runs[0].tool.driver.rules[]` **または** `runs[0].tool.extensions[].rules[]` に入るため、
+両方をマージして ID で引くのが確実です。
 
 ```bash
 SARIF=/home/runner/.copilot-code-review/reports/codeql/results.sarif
 
-# 件数
+# 件数（0 件なら CodeQL 由来の指摘はしない）
 jq '[.runs[].results[]] | length' "$SARIF"
 ```
 
 ```bash
-# ルールID・重大度・ファイル・行・メッセージの一覧
+# ルールID・security-severity・ファイル・行・メッセージの一覧（重大度の降順）
 jq -r '
   .runs[] as $run
-  | ($run.tool.driver.rules // []) as $rules
+  | ( ($run.tool.driver.rules // [])
+      + (($run.tool.extensions // []) | map(.rules // []) | add // [])
+    ) as $rules
+  | ($rules | map({key: .id, value: .}) | from_entries) as $byId
   | $run.results[]
   | . as $r
-  | ($rules[$r.ruleIndex // -1] // {}) as $rule
+  | ($byId[$r.ruleId] // {}) as $rule
   | [
+      (($rule.properties["security-severity"] // "0") | tonumber),
       $r.ruleId,
-      ($rule.properties["security-severity"] // $rule.defaultConfiguration.level // "note"),
-      $r.locations[0].physicalLocation.artifactLocation.uri,
-      ($r.locations[0].physicalLocation.region.startLine | tostring),
+      ($r.locations[0].physicalLocation.artifactLocation.uri // "-"),
+      (($r.locations[0].physicalLocation.region.startLine // 0) | tostring),
       $r.message.text
     ] | @tsv
-' "$SARIF"
+' "$SARIF" | sort -k1,1nr
 ```
 
 ```bash
@@ -133,9 +138,12 @@ jq -r --arg f "src/lib/report-export.ts" '
 ```bash
 # ルールの CWE タグと詳細説明（コメントの根拠として引用する）
 jq -r --arg rule "js/path-injection" '
-  .runs[].tool.driver.rules[]
+  .runs[]
+  | ( (.tool.driver.rules // [])
+      + ((.tool.extensions // []) | map(.rules // []) | add // [])
+    )[]
   | select(.id == $rule)
-  | "\(.id)\n重大度: \(.properties["security-severity"] // "-")\nタグ: \(.properties.tags | join(", "))\n\(.fullDescription.text)"
+  | "\(.id)\n重大度: \(.properties["security-severity"] // "-")\nタグ: \((.properties.tags // []) | join(", "))\n\(.fullDescription.text // .shortDescription.text // "")"
 ' "$SARIF"
 ```
 
